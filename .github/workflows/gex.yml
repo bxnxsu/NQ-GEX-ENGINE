@@ -1,0 +1,41 @@
+name: Polaris GEX
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  gex:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download project
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          pip install requests flask
+
+      - name: Download NDX options
+        run: |
+          python engine/download_ndx.py
+
+      - name: Calculate GEX
+        run: |
+          python engine/calculate_gex.py
+
+      - name: Generate Pine output
+        run: |
+          python engine/update_pine.py
+
+      - name: Send Discord update
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          python engine/send_discord.py
