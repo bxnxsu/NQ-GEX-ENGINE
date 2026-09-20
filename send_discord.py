@@ -1,12 +1,14 @@
 import json
 import requests
+import os
 from pathlib import Path
 from datetime import datetime
+
+WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 GEX_FILE = BASE_DIR / "output" / "gex_levels.json"
-WEBHOOK_FILE = BASE_DIR / "engine" / "discord_webhook.txt"
 LAST_FILE = BASE_DIR / "output" / "last_discord_levels.json"
 
 
@@ -52,8 +54,7 @@ def find_changes(old, new):
 
 
 def send_discord(levels, changed_levels):
-    with open(WEBHOOK_FILE, "r", encoding="utf-8") as f:
-        webhook_url = f.read().strip()
+    webhook_url = WEBHOOK_URL
 
     timestamp = datetime.now().astimezone().isoformat()
 
