@@ -4,10 +4,10 @@ import os
 from pathlib import Path
 from datetime import datetime
 
-WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
 GEX_FILE = BASE_DIR / "output" / "gex_levels.json"
 LAST_FILE = BASE_DIR / "output" / "last_discord_levels.json"
 
