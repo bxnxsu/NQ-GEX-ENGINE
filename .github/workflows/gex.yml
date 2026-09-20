@@ -19,9 +19,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install requests flask
 
       - name: Download NDX options
@@ -41,3 +43,4 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           python engine/send_discord.py
+
