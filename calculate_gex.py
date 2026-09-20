@@ -2,30 +2,21 @@ import json
 import math
 import requests
 
-from datetime import datetime
+from datetime import datetime, time, timezone
 from pathlib import Path
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-BASE_DIR = (
-    Path(__file__).resolve().parent.parent
-)
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-DATA_FILE = (
-    BASE_DIR
-    / "data"
-    / "ndx_options.json"
-)
+DATA_FILE = BASE_DIR / "data" / "ndx_options.json"
 
-OUTPUT_FILE = (
-    BASE_DIR
-    / "output"
-    / "gex_levels.json"
-)
+OUTPUT_FILE = BASE_DIR / "output" / "gex_levels.json"
 
 NQ_SYMBOL = "NQ=F"
 
@@ -41,6 +32,11 @@ MIN_OPEN_INTEREST = 1
 
 TOP_LEVELS = 10
 
+# NDX/NDXP options expire at 4:00 PM New York time
+EXPIRATION_TIME = time(16, 0)
+
+NEW_YORK = ZoneInfo("America/New_York")
+
 
 # ============================================================
 # NORMAL DISTRIBUTION
@@ -49,12 +45,8 @@ TOP_LEVELS = 10
 def normal_pdf(x):
 
     return (
-        math.exp(
-            -0.5 * x * x
-        )
-        / math.sqrt(
-            2.0 * math.pi
-        )
+        math.exp(-0.5 * x * x)
+        / math.sqrt(2.0 * math.pi)
     )
 
 
@@ -84,22 +76,16 @@ def black_scholes_gamma(
     try:
 
         d1 = (
-            math.log(
-                spot / strike
-            )
+            math.log(spot / strike)
             + (
                 RISK_FREE_RATE
                 - DIVIDEND_YIELD
-                + 0.5
-                * volatility
-                * volatility
+                + 0.5 * volatility * volatility
             )
             * time_to_expiry
         ) / (
             volatility
-            * math.sqrt(
-                time_to_expiry
-            )
+            * math.sqrt(time_to_expiry)
         )
 
         gamma = (
@@ -111,9 +97,7 @@ def black_scholes_gamma(
             / (
                 spot
                 * volatility
-                * math.sqrt(
-                    time_to_expiry
-                )
+                * math.sqrt(time_to_expiry)
             )
         )
 
@@ -136,10 +120,7 @@ def ndx_to_nq(
     if ndx_price is None:
         return None
 
-    return (
-        ndx_price
-        + basis
-    )
+    return ndx_price + basis
 
 
 # ============================================================
@@ -148,9 +129,7 @@ def ndx_to_nq(
 
 def get_nq_price():
 
-    print(
-        "Getting NQ futures price..."
-    )
+    print("Getting NQ futures price...")
 
     url = (
         "https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -159,8 +138,7 @@ def get_nq_price():
     )
 
     headers = {
-        "User-Agent":
-            "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0"
     }
 
     response = requests.get(
@@ -173,21 +151,13 @@ def get_nq_price():
 
     data = response.json()
 
-    result = (
-        data["chart"]
-        ["result"][0]
-    )
+    result = data["chart"]["result"][0]
 
     meta = result["meta"]
 
     price = (
-        meta.get(
-            "regularMarketPrice"
-        )
-        or
-        meta.get(
-            "previousClose"
-        )
+        meta.get("regularMarketPrice")
+        or meta.get("previousClose")
     )
 
     if price is None:
@@ -205,9 +175,7 @@ def get_nq_price():
 
 def load_data():
 
-    print(
-        "Loading NDX options data..."
-    )
+    print("Loading NDX options data...")
 
     if not DATA_FILE.exists():
 
@@ -232,12 +200,7 @@ def load_data():
 
 def get_options(raw):
 
-    return (
-        raw
-        ["data"]
-        ["data"]
-        ["options"]
-    )
+    return raw["data"]["data"]["options"]
 
 
 # ============================================================
@@ -246,11 +209,7 @@ def get_options(raw):
 
 def get_market_data(raw):
 
-    return (
-        raw
-        ["data"]
-        ["data"]
-    )
+    return raw["data"]["data"]
 
 
 # ============================================================
@@ -264,8 +223,7 @@ def parse_option_symbol(symbol):
 
     symbol = str(symbol)
 
-    # --------------------------------------------------------
-    # Standard format:
+    # Standard:
     #
     # NDX260918C04000000
     #
@@ -273,52 +231,35 @@ def parse_option_symbol(symbol):
     # YYMMDD
     # C/P
     # STRIKE * 1000
-    # --------------------------------------------------------
 
     if len(symbol) >= 18:
 
         try:
 
-            expiration_text = (
-                symbol[3:9]
-            )
+            expiration_text = symbol[3:9]
 
-            option_type = (
-                symbol[9]
-            )
+            option_type = symbol[9]
 
-            strike_text = (
-                symbol[10:]
-            )
+            strike_text = symbol[10:]
 
-            expiration = (
-                datetime.strptime(
-                    expiration_text,
-                    "%y%m%d"
-                ).date()
-            )
+            expiration = datetime.strptime(
+                expiration_text,
+                "%y%m%d"
+            ).date()
 
             strike = (
                 int(strike_text)
                 / 1000.0
             )
 
-            if option_type not in (
-                "C",
-                "P"
-            ):
+            if option_type not in ("C", "P"):
 
                 return None
 
             return {
-                "expiration":
-                    expiration,
-
-                "type":
-                    option_type,
-
-                "strike":
-                    strike
+                "expiration": expiration,
+                "type": option_type,
+                "strike": strike
             }
 
         except Exception:
@@ -329,60 +270,86 @@ def parse_option_symbol(symbol):
 
 
 # ============================================================
-# GET MARKET DATE
+# PARSE TRADE TIME
 # ============================================================
 
-def get_market_date(
-    options
-):
+def parse_trade_time(value):
 
-    dates = []
+    if not value:
+        return None
+
+    try:
+
+        parsed = datetime.fromisoformat(
+            str(value)
+        )
+
+        if parsed.tzinfo is None:
+
+            parsed = parsed.replace(
+                tzinfo=timezone.utc
+            )
+
+        return parsed
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# GET MARKET TIMESTAMP
+# ============================================================
+
+def get_market_timestamp(options):
+
+    timestamps = []
 
     for option in options:
 
-        trade_time = (
-            option.get(
-                "last_trade_time"
-            )
+        trade_time = option.get(
+            "last_trade_time"
         )
 
-        if not trade_time:
-            continue
+        parsed = parse_trade_time(
+            trade_time
+        )
 
-        try:
+        if parsed is not None:
 
-            parsed = datetime.fromisoformat(
-                trade_time
-            )
+            timestamps.append(parsed)
 
-            dates.append(
-                parsed.date()
-            )
-
-        except Exception:
-
-            continue
-
-    if not dates:
+    if not timestamps:
 
         raise RuntimeError(
-            "Could not determine market date."
+            "Could not determine market timestamp."
         )
 
-    return max(dates)
+    return max(timestamps)
+
+
+# ============================================================
+# GET MARKET DATE
+# ============================================================
+
+def get_market_date(options):
+
+    market_timestamp = get_market_timestamp(
+        options
+    )
+
+    return market_timestamp.astimezone(
+        NEW_YORK
+    ).date()
 
 
 # ============================================================
 # GET IV
 # ============================================================
 
-def get_iv(
-    option
-):
+def get_iv(option):
 
-    value = option.get(
-        "iv"
-    )
+    value = option.get("iv")
 
     if value is None:
         return None
@@ -398,8 +365,8 @@ def get_iv(
     if value <= 0:
         return None
 
-    # Cboe data can sometimes expose
-    # volatility as a percentage.
+    # CBOE can sometimes expose IV as a percentage.
+
     if value > 3:
 
         value /= 100.0
@@ -414,9 +381,7 @@ def get_iv(
 # GET OPEN INTEREST
 # ============================================================
 
-def get_open_interest(
-    option
-):
+def get_open_interest(option):
 
     value = option.get(
         "open_interest",
@@ -445,9 +410,7 @@ def prepare_options(
 
     for option in options:
 
-        symbol = option.get(
-            "option"
-        )
+        symbol = option.get("option")
 
         parsed = parse_option_symbol(
             symbol
@@ -456,64 +419,40 @@ def prepare_options(
         if parsed is None:
             continue
 
-        expiration = (
-            parsed["expiration"]
-        )
+        expiration = parsed["expiration"]
 
         if expiration < market_date:
-
             continue
 
-        strike = (
-            parsed["strike"]
-        )
+        strike = parsed["strike"]
 
-        option_type = (
-            parsed["type"]
-        )
+        option_type = parsed["type"]
 
         oi = get_open_interest(
             option
         )
 
         if oi < MIN_OPEN_INTEREST:
-
             continue
 
-        iv = get_iv(
-            option
-        )
-
-        # ----------------------------------------------------
-        # Cboe sometimes reports IV as 0.
-        #
-        # For those contracts we cannot calculate
-        # Black-Scholes gamma reliably, so exclude them.
-        # ----------------------------------------------------
+        iv = get_iv(option)
 
         if iv is None:
-
             continue
 
         prepared.append(
             {
-                "symbol":
-                    symbol,
+                "symbol": symbol,
 
-                "expiration":
-                    expiration,
+                "expiration": expiration,
 
-                "type":
-                    option_type,
+                "type": option_type,
 
-                "strike":
-                    strike,
+                "strike": strike,
 
-                "oi":
-                    oi,
+                "oi": oi,
 
-                "iv":
-                    iv
+                "iv": iv
             }
         )
 
@@ -521,25 +460,67 @@ def prepare_options(
 
 
 # ============================================================
+# EXPIRATION DATETIME
+# ============================================================
+
+def get_expiration_datetime(
+    expiration
+):
+
+    local_datetime = datetime.combine(
+        expiration,
+        EXPIRATION_TIME
+    )
+
+    return local_datetime.replace(
+        tzinfo=NEW_YORK
+    )
+
+
+# ============================================================
 # TIME TO EXPIRATION
 # ============================================================
 
 def time_to_expiration(
-    market_date,
+    market_timestamp,
     expiration
 ):
 
-    days = (
-        expiration
-        - market_date
-    ).days
+    if market_timestamp.tzinfo is None:
 
-    if days <= 0:
+        market_timestamp = market_timestamp.replace(
+            tzinfo=timezone.utc
+        )
+
+    expiration_datetime = (
+        get_expiration_datetime(
+            expiration
+        )
+    )
+
+    market_datetime_ny = (
+        market_timestamp.astimezone(
+            NEW_YORK
+        )
+    )
+
+    seconds_remaining = (
+        expiration_datetime
+        - market_datetime_ny
+    ).total_seconds()
+
+    if seconds_remaining <= 0:
 
         return 0.0
 
     return (
-        days / 365.0
+        seconds_remaining
+        / (
+            365.0
+            * 24.0
+            * 60.0
+            * 60.0
+        )
     )
 
 
@@ -550,11 +531,11 @@ def time_to_expiration(
 def calculate_option_gex(
     option,
     hypothetical_spot,
-    market_date
+    market_timestamp
 ):
 
     t = time_to_expiration(
-        market_date,
+        market_timestamp,
         option["expiration"]
     )
 
@@ -596,19 +577,17 @@ def calculate_option_gex(
 def calculate_total_gex(
     options,
     hypothetical_spot,
-    market_date
+    market_timestamp
 ):
 
     total = 0.0
 
     for option in options:
 
-        total += (
-            calculate_option_gex(
-                option,
-                hypothetical_spot,
-                market_date
-            )
+        total += calculate_option_gex(
+            option,
+            hypothetical_spot,
+            market_timestamp
         )
 
     return total
@@ -621,19 +600,17 @@ def calculate_total_gex(
 def calculate_gex_by_strike(
     options,
     hypothetical_spot,
-    market_date
+    market_timestamp
 ):
 
     levels = defaultdict(float)
 
     for option in options:
 
-        gex = (
-            calculate_option_gex(
-                option,
-                hypothetical_spot,
-                market_date
-            )
+        gex = calculate_option_gex(
+            option,
+            hypothetical_spot,
+            market_timestamp
         )
 
         levels[
@@ -650,23 +627,17 @@ def calculate_gex_by_strike(
 def build_gex_curve(
     options,
     spot,
-    market_date
+    market_timestamp
 ):
 
     lower = (
         spot
-        * (
-            1.0
-            - SCAN_PERCENT
-        )
+        * (1.0 - SCAN_PERCENT)
     )
 
     upper = (
         spot
-        * (
-            1.0
-            + SCAN_PERCENT
-        )
+        * (1.0 + SCAN_PERCENT)
     )
 
     curve = []
@@ -675,12 +646,10 @@ def build_gex_curve(
 
     while price <= upper:
 
-        gex = (
-            calculate_total_gex(
-                options,
-                price,
-                market_date
-            )
+        gex = calculate_total_gex(
+            options,
+            price,
+            market_timestamp
         )
 
         curve.append(
@@ -699,11 +668,10 @@ def build_gex_curve(
 # FIND GAMMA FLIP
 # ============================================================
 
-def find_gamma_flip(
-    curve
-):
+def find_gamma_flip(curve):
 
     previous_price = None
+
     previous_gex = None
 
     for price, gex in curve:
@@ -755,6 +723,7 @@ def find_gamma_flip(
                 )
 
         previous_price = price
+
         previous_gex = gex
 
     return None
@@ -764,9 +733,7 @@ def find_gamma_flip(
 # FIND WALLS
 # ============================================================
 
-def find_walls(
-    gex_by_strike
-):
+def find_walls(gex_by_strike):
 
     positive = [
         (
@@ -793,6 +760,7 @@ def find_walls(
     ]
 
     call_wall = None
+
     put_wall = None
 
     if positive:
@@ -828,8 +796,7 @@ def calculate_max_pain(
 
         option
 
-        for option
-        in options
+        for option in options
 
         if option["expiration"]
         == expiration
@@ -842,12 +809,12 @@ def calculate_max_pain(
     strikes = sorted(
         set(
             option["strike"]
-            for option
-            in expiry_options
+            for option in expiry_options
         )
     )
 
     best_strike = None
+
     lowest_pain = None
 
     for settlement in strikes:
@@ -856,27 +823,21 @@ def calculate_max_pain(
 
         for option in expiry_options:
 
-            strike = option[
-                "strike"
-            ]
+            strike = option["strike"]
 
-            oi = option[
-                "oi"
-            ]
+            oi = option["oi"]
 
             if option["type"] == "C":
 
                 intrinsic = max(
-                    settlement
-                    - strike,
+                    settlement - strike,
                     0
                 )
 
             else:
 
                 intrinsic = max(
-                    strike
-                    - settlement,
+                    strike - settlement,
                     0
                 )
 
@@ -891,6 +852,7 @@ def calculate_max_pain(
         ):
 
             lowest_pain = pain
+
             best_strike = settlement
 
     return best_strike
@@ -922,9 +884,7 @@ def get_positive_levels(
         reverse=True
     )
 
-    return levels[
-        :TOP_LEVELS
-    ]
+    return levels[:TOP_LEVELS]
 
 
 def get_negative_levels(
@@ -948,9 +908,7 @@ def get_negative_levels(
         key=lambda x: x[1]
     )
 
-    return levels[
-        :TOP_LEVELS
-    ]
+    return levels[:TOP_LEVELS]
 
 
 # ============================================================
@@ -1014,8 +972,7 @@ def save_output(
                         full_gamma_flip,
                         2
                     )
-                    if full_gamma_flip
-                    is not None
+                    if full_gamma_flip is not None
                     else None
                 ),
 
@@ -1028,8 +985,7 @@ def save_output(
                         ),
                         2
                     )
-                    if full_gamma_flip
-                    is not None
+                    if full_gamma_flip is not None
                     else None
                 ),
 
@@ -1039,8 +995,7 @@ def save_output(
                         call_wall,
                         2
                     )
-                    if call_wall
-                    is not None
+                    if call_wall is not None
                     else None
                 ),
 
@@ -1053,8 +1008,7 @@ def save_output(
                         ),
                         2
                     )
-                    if call_wall
-                    is not None
+                    if call_wall is not None
                     else None
                 ),
 
@@ -1064,8 +1018,7 @@ def save_output(
                         put_wall,
                         2
                     )
-                    if put_wall
-                    is not None
+                    if put_wall is not None
                     else None
                 ),
 
@@ -1078,8 +1031,7 @@ def save_output(
                         ),
                         2
                     )
-                    if put_wall
-                    is not None
+                    if put_wall is not None
                     else None
                 ),
 
@@ -1089,8 +1041,7 @@ def save_output(
                         max_pain,
                         2
                     )
-                    if max_pain
-                    is not None
+                    if max_pain is not None
                     else None
                 ),
 
@@ -1103,8 +1054,7 @@ def save_output(
                         ),
                         2
                     )
-                    if max_pain
-                    is not None
+                    if max_pain is not None
                     else None
                 )
         },
@@ -1124,8 +1074,7 @@ def save_output(
                         zero_dte_gamma_flip,
                         2
                     )
-                    if zero_dte_gamma_flip
-                    is not None
+                    if zero_dte_gamma_flip is not None
                     else None
                 ),
 
@@ -1138,8 +1087,7 @@ def save_output(
                         ),
                         2
                     )
-                    if zero_dte_gamma_flip
-                    is not None
+                    if zero_dte_gamma_flip is not None
                     else None
                 ),
 
@@ -1149,8 +1097,7 @@ def save_output(
                         zero_dte_call_wall,
                         2
                     )
-                    if zero_dte_call_wall
-                    is not None
+                    if zero_dte_call_wall is not None
                     else None
                 ),
 
@@ -1163,8 +1110,7 @@ def save_output(
                         ),
                         2
                     )
-                    if zero_dte_call_wall
-                    is not None
+                    if zero_dte_call_wall is not None
                     else None
                 ),
 
@@ -1174,8 +1120,7 @@ def save_output(
                         zero_dte_put_wall,
                         2
                     )
-                    if zero_dte_put_wall
-                    is not None
+                    if zero_dte_put_wall is not None
                     else None
                 ),
 
@@ -1188,8 +1133,7 @@ def save_output(
                         ),
                         2
                     )
-                    if zero_dte_put_wall
-                    is not None
+                    if zero_dte_put_wall is not None
                     else None
                 )
         },
@@ -1197,25 +1141,22 @@ def save_output(
         "major_positive_gamma": [
 
             {
-                "ndx":
-                    round(
+                "ndx": round(
+                    strike,
+                    2
+                ),
+
+                "nq": round(
+                    ndx_to_nq(
                         strike,
-                        2
+                        basis
                     ),
+                    2
+                ),
 
-                "nq":
-                    round(
-                        ndx_to_nq(
-                            strike,
-                            basis
-                        ),
-                        2
-                    ),
-
-                "gex":
-                    round(
-                        value
-                    )
+                "gex": round(
+                    value
+                )
             }
 
             for strike, value
@@ -1225,25 +1166,22 @@ def save_output(
         "major_negative_gamma": [
 
             {
-                "ndx":
-                    round(
+                "ndx": round(
+                    strike,
+                    2
+                ),
+
+                "nq": round(
+                    ndx_to_nq(
                         strike,
-                        2
+                        basis
                     ),
+                    2
+                ),
 
-                "nq":
-                    round(
-                        ndx_to_nq(
-                            strike,
-                            basis
-                        ),
-                        2
-                    ),
-
-                "gex":
-                    round(
-                        value
-                    )
+                "gex": round(
+                    value
+                )
             }
 
             for strike, value
@@ -1253,25 +1191,22 @@ def save_output(
         "zero_dte_major_positive_gamma": [
 
             {
-                "ndx":
-                    round(
+                "ndx": round(
+                    strike,
+                    2
+                ),
+
+                "nq": round(
+                    ndx_to_nq(
                         strike,
-                        2
+                        basis
                     ),
+                    2
+                ),
 
-                "nq":
-                    round(
-                        ndx_to_nq(
-                            strike,
-                            basis
-                        ),
-                        2
-                    ),
-
-                "gex":
-                    round(
-                        value
-                    )
+                "gex": round(
+                    value
+                )
             }
 
             for strike, value
@@ -1281,25 +1216,22 @@ def save_output(
         "zero_dte_major_negative_gamma": [
 
             {
-                "ndx":
-                    round(
+                "ndx": round(
+                    strike,
+                    2
+                ),
+
+                "nq": round(
+                    ndx_to_nq(
                         strike,
-                        2
+                        basis
                     ),
+                    2
+                ),
 
-                "nq":
-                    round(
-                        ndx_to_nq(
-                            strike,
-                            basis
-                        ),
-                        2
-                    ),
-
-                "gex":
-                    round(
-                        value
-                    )
+                "gex": round(
+                    value
+                )
             }
 
             for strike, value
@@ -1325,18 +1257,10 @@ def save_output(
         )
 
     print()
-    print(
-        "TRADINGVIEW OUTPUT"
-    )
-    print(
-        "----------------------------------------"
-    )
-    print(
-        "Saved to:"
-    )
-    print(
-        OUTPUT_FILE
-    )
+    print("TRADINGVIEW OUTPUT")
+    print("----------------------------------------")
+    print("Saved to:")
+    print(OUTPUT_FILE)
 
 
 # ============================================================
@@ -1346,15 +1270,9 @@ def save_output(
 def main():
 
     print()
-    print(
-        "========================================"
-    )
-    print(
-        "       NDX GEX ENGINE - STAGE 3"
-    )
-    print(
-        "========================================"
-    )
+    print("========================================")
+    print("          NQ GEX ENGINE")
+    print("========================================")
     print()
 
     # --------------------------------------------------------
@@ -1363,18 +1281,12 @@ def main():
 
     raw = load_data()
 
-    options = get_options(
-        raw
-    )
+    options = get_options(raw)
 
-    market_data = get_market_data(
-        raw
-    )
+    market_data = get_market_data(raw)
 
     ndx_spot = float(
-        market_data[
-            "current_price"
-        ]
+        market_data["current_price"]
     )
 
     nq_price = get_nq_price()
@@ -1384,13 +1296,22 @@ def main():
         - ndx_spot
     )
 
-    market_date = get_market_date(
+    market_timestamp = get_market_timestamp(
         options
     )
 
+    market_date = market_timestamp.astimezone(
+        NEW_YORK
+    ).date()
+
     print()
     print(
-        "MARKET DATA DATE:",
+        "MARKET TIMESTAMP:",
+        market_timestamp
+    )
+
+    print(
+        "MARKET DATE:",
         market_date
     )
 
@@ -1447,9 +1368,7 @@ def main():
     # EXPIRATIONS
     # --------------------------------------------------------
 
-    expiration_counts = (
-        defaultdict(int)
-    )
+    expiration_counts = defaultdict(int)
 
     for option in prepared:
 
@@ -1458,12 +1377,8 @@ def main():
         ] += 1
 
     print()
-    print(
-        "EXPIRATION BREAKDOWN"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("EXPIRATION BREAKDOWN")
+    print("----------------------------------------")
 
     for expiration in sorted(
         expiration_counts
@@ -1485,8 +1400,7 @@ def main():
 
         expiration
 
-        for expiration
-        in expiration_counts
+        for expiration in expiration_counts
 
         if expiration >= market_date
     )
@@ -1497,15 +1411,17 @@ def main():
             "No option expirations were found."
         )
 
-    next_expiration = (
-        future_expirations[0]
-    )
+    next_expiration = future_expirations[0]
 
-    # True 0DTE means the option expires on the market-data date.
-    # The next future expiry is NOT 0DTE.
+    # True 0DTE means the option expires
+    # on the market-data date.
+
     zero_dte_expiration = (
+
         market_date
+
         if market_date in expiration_counts
+
         else None
     )
 
@@ -1515,16 +1431,19 @@ def main():
         next_expiration
     )
 
+    print(
+        "0DTE EXPIRATION:",
+        zero_dte_expiration
+    )
+
     # --------------------------------------------------------
     # FULL GEX
     # --------------------------------------------------------
 
-    current_gex = (
-        calculate_total_gex(
-            prepared,
-            ndx_spot,
-            market_date
-        )
+    current_gex = calculate_total_gex(
+        prepared,
+        ndx_spot,
+        market_timestamp
     )
 
     print()
@@ -1537,56 +1456,37 @@ def main():
         "BUILDING FULL GEX CURVE..."
     )
 
-    full_curve = (
-        build_gex_curve(
-            prepared,
-            ndx_spot,
-            market_date
-        )
+    full_curve = build_gex_curve(
+        prepared,
+        ndx_spot,
+        market_timestamp
     )
 
-    print(
-        "GEX AT CURRENT PRICE:",
-        f"{current_gex:,.0f}"
+    full_gamma_flip = find_gamma_flip(
+        full_curve
     )
 
-    full_gamma_flip = (
-        find_gamma_flip(
-            full_curve
-        )
+    full_gex_by_strike = calculate_gex_by_strike(
+        prepared,
+        ndx_spot,
+        market_timestamp
     )
 
-    full_gex_by_strike = (
-        calculate_gex_by_strike(
-            prepared,
-            ndx_spot,
-            market_date
-        )
+    call_wall, put_wall = find_walls(
+        full_gex_by_strike
     )
 
-    call_wall, put_wall = (
-        find_walls(
-            full_gex_by_strike
-        )
+    max_pain = calculate_max_pain(
+        prepared,
+        next_expiration
     )
 
-    max_pain = (
-        calculate_max_pain(
-            prepared,
-            next_expiration
-        )
+    positive_levels = get_positive_levels(
+        full_gex_by_strike
     )
 
-    positive_levels = (
-        get_positive_levels(
-            full_gex_by_strike
-        )
-    )
-
-    negative_levels = (
-        get_negative_levels(
-            full_gex_by_strike
-        )
+    negative_levels = get_negative_levels(
+        full_gex_by_strike
     )
 
     # --------------------------------------------------------
@@ -1594,12 +1494,8 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print(
-        "FULL CHAIN"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("FULL CHAIN")
+    print("----------------------------------------")
 
     if full_gamma_flip is not None:
 
@@ -1666,28 +1562,27 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print(
-        "0DTE"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("0DTE")
+    print("----------------------------------------")
 
     if zero_dte_expiration is None:
 
         zero_dte_options = []
+
         zero_dte_gamma_flip = None
+
         zero_dte_call_wall = None
+
         zero_dte_put_wall = None
+
         zero_positive = []
+
         zero_negative = []
 
         print(
-            "0DTE EXPIRATION: None"
-        )
-        print(
             "0DTE OPTIONS USED: 0"
         )
+
         print(
             "No options expire on the market-data date."
         )
@@ -1698,29 +1593,31 @@ def main():
 
             option
 
-            for option
-            in prepared
+            for option in prepared
 
             if option["expiration"]
             == zero_dte_expiration
         ]
 
         print(
-            "0DTE EXPIRATION:",
-            zero_dte_expiration
-        )
-
-        print(
             "0DTE OPTIONS USED:",
             len(zero_dte_options)
         )
 
-        zero_dte_current_gex = (
-            calculate_total_gex(
-                zero_dte_options,
-                ndx_spot,
-                market_date
-            )
+        # ----------------------------------------------------
+        # IMPORTANT:
+        #
+        # time_to_expiration() now uses the actual timestamp
+        # and today's 4:00 PM New York expiration.
+        #
+        # Therefore 0DTE contracts now have a real,
+        # non-zero time value during the trading session.
+        # ----------------------------------------------------
+
+        zero_dte_current_gex = calculate_total_gex(
+            zero_dte_options,
+            ndx_spot,
+            market_timestamp
         )
 
         print(
@@ -1732,25 +1629,21 @@ def main():
             "BUILDING 0DTE GEX CURVE..."
         )
 
-        zero_dte_curve = (
-            build_gex_curve(
-                zero_dte_options,
-                ndx_spot,
-                market_date
-            )
+        zero_dte_curve = build_gex_curve(
+            zero_dte_options,
+            ndx_spot,
+            market_timestamp
         )
 
-        zero_dte_gamma_flip = (
-            find_gamma_flip(
-                zero_dte_curve
-            )
+        zero_dte_gamma_flip = find_gamma_flip(
+            zero_dte_curve
         )
 
         zero_dte_gex_by_strike = (
             calculate_gex_by_strike(
                 zero_dte_options,
                 ndx_spot,
-                market_date
+                market_timestamp
             )
         )
 
@@ -1761,16 +1654,12 @@ def main():
             zero_dte_gex_by_strike
         )
 
-        zero_positive = (
-            get_positive_levels(
-                zero_dte_gex_by_strike
-            )
+        zero_positive = get_positive_levels(
+            zero_dte_gex_by_strike
         )
 
-        zero_negative = (
-            get_negative_levels(
-                zero_dte_gex_by_strike
-            )
+        zero_negative = get_negative_levels(
+            zero_dte_gex_by_strike
         )
 
         if zero_dte_gamma_flip is not None:
@@ -1822,17 +1711,9 @@ def main():
     # POSITIVE LEVELS
     # --------------------------------------------------------
 
-    # --------------------------------------------------------
-    # POSITIVE LEVELS
-    # --------------------------------------------------------
-
     print()
-    print(
-        "MAJOR POSITIVE GAMMA"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("MAJOR POSITIVE GAMMA")
+    print("----------------------------------------")
 
     for strike, value in positive_levels:
 
@@ -1848,12 +1729,8 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print(
-        "MAJOR NEGATIVE GAMMA"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("MAJOR NEGATIVE GAMMA")
+    print("----------------------------------------")
 
     for strike, value in negative_levels:
 
@@ -1869,12 +1746,8 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print(
-        "0DTE MAJOR POSITIVE GAMMA"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("0DTE MAJOR POSITIVE GAMMA")
+    print("----------------------------------------")
 
     for strike, value in zero_positive:
 
@@ -1890,12 +1763,8 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print(
-        "0DTE MAJOR NEGATIVE GAMMA"
-    )
-    print(
-        "----------------------------------------"
-    )
+    print("0DTE MAJOR NEGATIVE GAMMA")
+    print("----------------------------------------")
 
     for strike, value in zero_negative:
 
@@ -1939,15 +1808,9 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print(
-        "========================================"
-    )
-    print(
-        "          STAGE 3 COMPLETE"
-    )
-    print(
-        "========================================"
-    )
+    print("========================================")
+    print("             GEX COMPLETE")
+    print("========================================")
 
 
 # ============================================================
